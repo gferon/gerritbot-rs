@@ -520,7 +520,7 @@ impl Response {
 pub enum Task {
     Reply(Response),
     ReplyAndSave(Response),
-    FetchComments(String, String, String),
+    FetchComments(String, gerrit::Change, String),
 }
 
 const GREETINGS_MSG: &str =
@@ -573,7 +573,7 @@ pub fn update(action: Action, bot: Bot) -> (Bot, Option<Task>) {
         Action::UpdateApprovals(event) => {
             bot.get_approvals_msg(&event).map(|(user, message, is_human)| {
                 if is_human {
-                    Task::FetchComments(user.spark_person_id.clone(), event.change.id, message)
+                    Task::FetchComments(user.spark_person_id.clone(), event.change, message)
                 } else {
                     Task::Reply(Response::new(user.spark_person_id.clone(), message))
                 }

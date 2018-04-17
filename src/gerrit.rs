@@ -326,24 +326,20 @@ pub fn change_sink(
     priv_key_path: PathBuf,
 ) -> Result<
     (
-        Sender<(String, String, String)>,
+        Sender<(String, Change, String)>,
         Box<Stream<Item = bot::Action, Error = String>>,
     ),
     String,
 > {
     let mut conn = GerritConnection::connect(host, username, priv_key_path)?;
-    let (tx, rx) = channel::<(String, String, String)>(1);
+    let (tx, rx) = channel::<(String, Change, String)>(1);
     let response_stream = rx.then(move |data| {
-        let (user, change_id, message) = data.expect("receiver should never fail");
+        let (user, change, message) = data.expect("receiver should never fail");
 
         let res = conn.session.channel_session().map(|ssh_channel| {
-            query_change(ssh_channel, &change_id)
-                .map_err(|e| format!("Could not parse json: {}", e))
-                .map(|change| {
-                    // TODO: avoid cloning
-                    debug!("Got response: {:?}", change);
-                    bot::Action::ChangeFetched(user.clone(), message.clone(), Box::new(change))
-                })
+            let cchange = query_change(ssh_channel, &change);
+            debug!("Got response: {:?}", cchange);
+            Ok(bot::Action::ChangeFetched(user.clone(), message.clone(), Box::new(cchange)))
         });
 
         if let Ok(fut_resp) = res {
@@ -367,22 +363,21 @@ pub fn change_sink(
                 )
             })
             .and_then(|ssh_channel| {
-                query_change(ssh_channel, &change_id)
-                    .map_err(|e| format!("Could not parse json: {}", e))
-                    .map(|change| bot::Action::ChangeFetched(user, message, Box::new(change)))
+                let cchange = query_change(ssh_channel, &change);
+                Ok(bot::Action::ChangeFetched(user, message, Box::new(cchange)))
             })
     });
 
     Ok((tx, Box::new(response_stream)))
 }
 
-pub fn query_change(
+pub fn fetch_comments(
     mut ssh_channel: Channel,
-    change_id: &str,
-) -> Result<Change, serde_json::Error> {
+    change: &Change,
+) -> Change {
     let query = format!(
         "gerrit query --format JSON --current-patch-set --comments {}",
-        change_id
+        change.id
     );
     ssh_channel.exec(&query).unwrap();
 
@@ -391,7 +386,10 @@ pub fn query_change(
 
     // event from our channel cannot fail
     let json: String = line.unwrap().ok().unwrap();
-    serde_json::from_str(&json)
+    let complete_change: Change = serde_json::from_str(&json).map_err(|e| format!("Could not parse json: {}", e)).unwrap();
+    let mut new_change = change.clone();
+    new_change.comments = complete_change.comments;
+    new_change
 }
 
 #[cfg(test)]
